@@ -6,21 +6,32 @@ import requests
 import base64
 
 
-# ======================
-# LICHESS CLOUD ENGINE API
-# ======================
+# ============================================
+#  LICHESS CLOUD ENGINE (ĐÃ SỬA LỖI CHẠY STREAMLIT CLOUD)
+# ============================================
 
 def get_engine_eval(fen, depth=14):
     url = "https://lichess.org/api/cloud-eval"
-    r = requests.get(url, params={"fen": fen, "depth": depth})
-    if r.status_code != 200:
+    headers = {
+        "User-Agent": "ChessTrainerStreamlit/1.0 (contact: your-email@example.com)"
+    }
+    try:
+        r = requests.get(
+            url,
+            params={"fen": fen, "depth": depth},
+            headers=headers,
+            timeout=10
+        )
+        if r.status_code != 200:
+            return None
+        return r.json()
+    except:
         return None
-    return r.json()
 
 
-# ======================
-# RANDOM POSITION
-# ======================
+# ============================================
+#  RANDOM POSITION GENERATOR
+# ============================================
 
 def random_position(plies=12):
     board = chess.Board()
@@ -32,12 +43,13 @@ def random_position(plies=12):
     return board
 
 
-# ======================
-# AUTO PUZZLE GENERATOR
-# ======================
+# ============================================
+#  PUZZLE GENERATOR (MATE + TACTIC)
+# ============================================
 
 def generate_puzzle(depth=14, min_gap=150):
-    while True:
+    # thử tối đa 50 lần để tránh treo
+    for _ in range(50):
         board = random_position(random.randint(6, 24))
         fen = board.fen()
 
@@ -46,13 +58,13 @@ def generate_puzzle(depth=14, min_gap=150):
             continue
 
         pvs = info["pvs"]
-        if len(pvs) < 1:
+        if len(pvs) == 0:
             continue
 
         best = pvs[0]
         best_move = best["moves"].split()[0]
 
-        # Mate
+        # Nếu có Mate → tạo bài chiếu bí
         if "mate" in best:
             return {
                 "fen": fen,
@@ -60,10 +72,11 @@ def generate_puzzle(depth=14, min_gap=150):
                 "type": f"Mate in {abs(best['mate'])}"
             }
 
-        # Tactic
+        # Nếu không mate → xét chiến thuật
         if len(pvs) >= 2:
             best_cp = best.get("cp", 0)
             second_cp = pvs[1].get("cp", 0)
+
             if (best_cp - second_cp) >= min_gap:
                 return {
                     "fen": fen,
@@ -71,10 +84,12 @@ def generate_puzzle(depth=14, min_gap=150):
                     "type": "Tactic"
                 }
 
+    return None  # không tìm được bài trong 50 lần thử
 
-# ======================
-# RENDER BOARD
-# ======================
+
+# ============================================
+#  RENDER BOARD (SVG)
+# ============================================
 
 def render_board(fen):
     board = chess.Board(fen)
@@ -83,9 +98,9 @@ def render_board(fen):
     return f'<img src="data:image/svg+xml;base64,{b64}"/>'
 
 
-# ======================
-# BUILD BOARD FROM SQUARE LIST
-# ======================
+# ============================================
+#  BUILD BOARD FROM MANUAL INPUT
+# ============================================
 
 def build_board_from_squares(text):
     """
@@ -125,15 +140,11 @@ def build_board_from_squares(text):
     return board
 
 
-# ======================
-# ALGEBRAIC NOTATION PARSER
-# ======================
+# ============================================
+#  ALGEBRAIC NOTATION PARSER (SAN → UCI)
+# ============================================
 
 def algebraic_to_uci(board, move_str):
-    """
-    Chuyển nước từ SAN/Algebraic (Như Nf3, Qh5, Bxe6+)
-    thành UCI để so sánh với lời giải.
-    """
     move_str = move_str.strip()
 
     # rocastle
@@ -149,12 +160,13 @@ def algebraic_to_uci(board, move_str):
         return None
 
 
-# ======================
-# STREAMLIT UI
-# ======================
+# ============================================
+#  STREAMLIT UI
+# ============================================
 
 st.set_page_config(page_title="Chess Trainer Plus", page_icon="♟")
-st.title("♟ Trình tạo bài tập cờ vua – bản hoàn chỉnh")
+st.title("♟ Trình tạo bài tập cờ vua – Bản Hoàn Chỉnh")
+
 
 tab1, tab2, tab3 = st.tabs([
     "🎲 Tạo bài tự động",
@@ -163,94 +175,98 @@ tab1, tab2, tab3 = st.tabs([
 ])
 
 
-# ======================
-# TAB 1 – AUTO PUZZLE
-# ======================
+# ============================================
+#  TAB 1 – AUTO PUZZLE
+# ============================================
 
 with tab1:
+    st.subheader("🎲 Tự sinh bài tập từ engine (miễn phí – không giới hạn)")
+
     difficulty = st.select_slider("Độ khó", ["Dễ", "Vừa", "Khó"])
     depth_map = {"Dễ": 12, "Vừa": 14, "Khó": 18}
     gap_map = {"Dễ": 120, "Vừa": 150, "Khó": 200}
 
-    if st.button("🎲 Tạo bài mới"):
-        st.session_state["puzzle"] = generate_puzzle(
+    if st.button("Tạo bài mới 🎯"):
+        puzzle = generate_puzzle(
             depth=depth_map[difficulty],
             min_gap=gap_map[difficulty]
         )
+        st.session_state["puzzle"] = puzzle
 
-    if "puzzle" in st.session_state:
+    if "puzzle" in st.session_state and st.session_state["puzzle"]:
         p = st.session_state["puzzle"]
 
-        st.subheader(f"Loại bài: **{p['type']}**")
+        st.subheader(f"📌 Loại bài: **{p['type']}**")
         st.write(f"FEN: `{p['fen']}`")
 
         st.markdown(render_board(p["fen"]), unsafe_allow_html=True)
 
-        # --- UCI input ---
-        st.write("### 📝 Nhập nước đi dạng UCI (e2e4)")
-        uci_move = st.text_input("Nước đi UCI:", key="uci1")
+        # ----- UCI INPUT -----
+        st.write("### 📝 Nhập nước UCI (vd: e2e4)")
+
+        uci_move = st.text_input("UCI Move:", key="uci_1")
 
         if st.button("Kiểm tra UCI"):
             if uci_move == p["solution"]:
                 st.success("✔ Chính xác!")
             else:
-                st.error("❌ Sai rồi!")
+                st.error(f"❌ Sai rồi!")
 
-        # --- Algebraic input ---
-        st.write("### 💬 Nhập nước đi dạng Algebraic (Nf3, Qh5, Bxe6+)")
-        algebraic_move = st.text_input("Nước đi SAN/AN:", key="alg1")
+        # ----- ALGEBRAIC INPUT -----
+        st.write("### 💬 Nhập nước dạng SAN (vd: Nf3, Qh5, Bxe6+)")
 
-        if st.button("Kiểm tra Algebraic"):
+        alg_move = st.text_input("SAN Move:", key="san_1")
+        if st.button("Kiểm tra SAN"):
             board = chess.Board(p["fen"])
-            uci = algebraic_to_uci(board, algebraic_move)
+            uci = algebraic_to_uci(board, alg_move)
 
             if uci is None:
-                st.error("⚠ Không hiểu nước AN bạn nhập.")
+                st.error("⚠ Không hiểu nước bạn nhập.")
             elif uci == p["solution"]:
                 st.success("🎉 Chính xác (AN → UCI)!")
             else:
-                st.error(f"❌ Sai rồi. Nước bạn nhập là: **{uci}**")
+                st.error(f"❌ Sai rồi. Bạn nhập thành UCI: **{uci}**")
 
-        if st.button("Xem lời giải"):
-            st.info(f"Đáp án đúng: **{p['solution']}**")
+        if st.button("Xem đáp án"):
+            st.info(f"Đáp án: **{p['solution']}**")
 
 
-# ======================
-# TAB 2 – FEN INPUT
-# ======================
+
+# ============================================
+#  TAB 2 – FEN INPUT
+# ============================================
 
 with tab2:
-    st.subheader("✔ Nhập FEN để hiển thị bàn cờ")
-    fen_input = st.text_input("Nhập mã FEN:", key="feninput")
+    st.subheader("📥 Nhập mã FEN")
+    fen_text = st.text_input("Nhập FEN:", key="fen_input")
 
-    if st.button("Vẽ FEN"):
+    if st.button("Vẽ bàn cờ từ FEN"):
         try:
-            st.markdown(render_board(fen_input), unsafe_allow_html=True)
+            st.markdown(render_board(fen_text), unsafe_allow_html=True)
         except:
             st.error("❌ FEN không hợp lệ.")
 
 
-# ======================
-# TAB 3 – SQUARE INPUT
-# ======================
+# ============================================
+#  TAB 3 – MANUAL BOARD BUILDER
+# ============================================
 
 with tab3:
-    st.subheader("✔ Tạo bàn cờ từ ký hiệu ô")
+    st.subheader("⌨ Tạo bàn cờ từ ký hiệu ô")
 
     st.write("""
-    Ví dụ nhập:
-
+    Ví dụ nhập:  
     **Ke1, Qh5, pa7, pb7, ph7, ra8**
-    
+
     - Viết hoa = quân trắng  
     - Viết thường = quân đen  
-    - Ký hiệu ô theo chuẩn (a1 đến h8)
+    - Tên ô theo chuẩn quốc tế (a1–h8)
     """)
 
-    sq_input = st.text_area("Danh sách quân:")
-    if st.button("Tạo bàn từ ký hiệu"):
+    sq_input = st.text_area("Danh sách quân cờ:")
+    if st.button("Tạo bàn cờ"):
         try:
             board = build_board_from_squares(sq_input)
             st.markdown(render_board(board.fen()), unsafe_allow_html=True)
         except:
-            st.error("❌ Lỗi khi dựng bàn. Hãy kiểm tra ký hiệu.")
+            st.error("❌ Không dựng được bàn cờ. Kiểm tra lại ký hiệu.")
