@@ -2,52 +2,83 @@ import streamlit as st
 import chess
 import chess.svg
 import random
+import requests
 import base64
 
+
 # ======================
-#  HÀM TẠO BÀI TẬP ĐƠN GIẢN
+# LICHESS CLOUD ENGINE API
 # ======================
 
-def random_mate_position():
-    """Tạo bài chiếu bí 1–2 nước (dạng dễ)."""
-    puzzles = [
-        {
-            "fen": "6k1/5ppp/8/8/8/2Q5/5PPP/6K1 w - - 0 1",
-            "solution": "c3c8",
-            "type": "Mate in 2"
-        },
-        {
-            "fen": "8/8/5kp1/7p/8/6K1/7P/6Q1 w - - 0 1",
-            "solution": "g1g6",
-            "type": "Mate in 1"
-        },
-        {
-            "fen": "6k1/5ppp/8/8/8/5Q2/5PPP/6K1 w - - 0 1",
-            "solution": "f3a8",
-            "type": "Mate in 2"
-        }
-    ]
-    return random.choice(puzzles)
-
-def random_tactic_position():
-    """Tạo bài chiến thuật dễ – fork, mất quân."""
-    puzzles = [
-        {
-            "fen": "rnbqkbnr/pppp1ppp/8/4p3/3PP3/5N2/PPP2PPP/RNBQKB1R w KQkq - 1 3",
-            "solution": "f3e5",
-            "type": "Winning a pawn"
-        },
-        {
-            "fen": "rnbqkb1r/pppp1ppp/5n2/4p3/4P3/2N2N2/PPPP1PPP/R1BQKB1R w KQkq - 2 4",
-            "solution": "c3e4",
-            "type": "Fork"
-        }
-    ]
-    return random.choice(puzzles)
+def get_engine_eval(fen, depth=14):
+    """Dùng Stockfish 16 miễn phí từ Lichess."""
+    url = "https://lichess.org/api/cloud-eval"
+    r = requests.get(url, params={"fen": fen, "depth": depth})
+    if r.status_code != 200:
+        return None
+    return r.json()
 
 
 # ======================
-#  HÀM HIỂN THỊ BÀN CỜ SVG
+#  TẠO VỊ TRÍ NGẪU NHIÊN
+# ======================
+
+def random_position(plies=12):
+    board = chess.Board()
+    for _ in range(plies):
+        if board.is_game_over():
+            break
+        move = random.choice(list(board.legal_moves))
+        board.push(move)
+    return board
+
+
+# ======================
+#  TẠO BÀI TẬP TỰ ĐỘNG
+# ======================
+
+def generate_puzzle(depth=14, min_gap=150):
+    """Trả về puzzle dạng: {fen, solution, type}."""
+
+    while True:
+        board = random_position(random.randint(8, 24))
+        fen = board.fen()
+
+        info = get_engine_eval(fen, depth=depth)
+        if info is None or "pvs" not in info:
+            continue
+
+        pvs = info["pvs"]
+        if len(pvs) < 1:
+            continue
+
+        best = pvs[0]
+        best_move = best["moves"].split()[0]
+
+        # Nếu có mate → Mate puzzle
+        if "mate" in best:
+            return {
+                "fen": fen,
+                "solution": best_move,
+                "type": f"Mate in {best['mate'] if best['mate']>0 else -best['mate']}"
+            }
+
+        # Nếu không mate → tactic
+        if len(pvs) >= 2:
+            second = pvs[1]
+            best_score = best.get("cp", 0)
+            second_score = second.get("cp", 0)
+
+            if (best_score - second_score) >= min_gap:
+                return {
+                    "fen": fen,
+                    "solution": best_move,
+                    "type": "Tactic (winning move)"
+                }
+
+
+# ======================
+# HIỂN THỊ BÀN CỜ SVG
 # ======================
 
 def render_board(fen):
@@ -58,44 +89,39 @@ def render_board(fen):
 
 
 # ======================
-#  GIAO DIỆN STREAMLIT
+# STREAMLIT UI
 # ======================
 
 st.set_page_config(page_title="Chess Trainer", page_icon="♟")
+st.title("♟ Trình tạo bài tập cờ vua – TỰ ĐỘNG & KHÔNG GIỚI HẠN")
 
-st.title("♟ Chương trình tạo bài tập cờ vua – Streamlit")
+difficulty = st.select_slider("Độ khó", ["Dễ", "Vừa", "Khó"])
+depth_map = {"Dễ": 12, "Vừa": 14, "Khó": 18}
+gap_map = {"Dễ": 120, "Vừa": 150, "Khó": 200}
 
-mode = st.selectbox(
-    "Chọn loại bài tập:",
-    ["Chiếu Bí", "Chiến Thuật"]
-)
-
-if st.button("🎲 Tạo bài tập mới"):
-    if mode == "Chiếu Bí":
-        puzzle = random_mate_position()
-    else:
-        puzzle = random_tactic_position()
-
-    st.session_state["puzzle"] = puzzle
-    st.session_state["answered"] = False
+if st.button("🎲 Tạo bài mới"):
+    st.session_state["puzzle"] = generate_puzzle(
+        depth=depth_map[difficulty],
+        min_gap=gap_map[difficulty],
+    )
 
 if "puzzle" in st.session_state:
 
     p = st.session_state["puzzle"]
 
-    st.subheader(f"Loại bài tập: **{p['type']}**")
-    st.write(f"**FEN:** `{p['fen']}`")
+    st.subheader(f"Loại bài: **{p['type']}**")
+    st.write(f"FEN: `{p['fen']}`")
 
     st.markdown(render_board(p["fen"]), unsafe_allow_html=True)
 
-    move = st.text_input("Nhập nước đi theo dạng UCI (ví dụ: e2e4, g1f3):")
+    move = st.text_input("Nhập nước đi theo UCI (vd: e2e4):")
 
-    if st.button("Kiểm tra ☑️"):
+    if st.button("Kiểm tra"):
         if move == p["solution"]:
-            st.success("✔ Chính xác! Bạn đã tìm được nước đi đúng.")
+            st.success("✔ Chính xác!")
         else:
-            st.error("❌ Chưa đúng. Hãy thử lại.")
+            st.error("❌ Sai rồi, thử lại nhé.")
 
-    if st.button("Xem đáp án 👀"):
+    if st.button("Xem đáp án"):
         st.info(f"Đáp án đúng: **{p['solution']}**")
 
